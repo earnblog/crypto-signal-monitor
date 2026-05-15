@@ -347,9 +347,11 @@ change_str = f"{'+' if change_24h>=0 else ''}{change_24h:.2f}%"
 total_color = "#4CAF50" if total >= 65 else "#FF9800" if total >= 45 else "#f44336"
 total_label = "看多" if total >= 65 else "观望" if total >= 45 else "看空"
 
+swap_price = float(swap_ticker.get("last", 0)) if swap_ticker else 0
 col1, col2, col3, col4, col5 = st.columns(5)
 price_str = f"${last_price:,.0f}" if last_price >= 1 else f"${last_price:.6f}"
-metric_card(col1, "当前价格", price_str, change_str, price_color)
+swap_str = f"合约 ${swap_price:,.0f}" if swap_price > 0 else "合约 N/A"
+metric_card(col1, "现货价格", price_str, swap_str, price_color)
 vol_display = global_vol_24h if global_vol_24h > 0 else vol_ccy_24h
 metric_card(col2, "全市场24h成交额", f"${vol_display/1e9:.2f}B" if vol_display >= 1e9 else f"${vol_display/1e6:.0f}M", "CoinGecko 全市场")
 metric_card(col3, "换手率", f"{turnover_pct:.2f}%" if turnover_pct > 0 else "N/A", "成交额/市值")
@@ -363,6 +365,13 @@ left_col, right_col = st.columns([1.1, 0.9])
 with left_col:
     st.markdown("##### 五维度信号")
 
+    SIGNAL_TIPS = {
+        "量比": "今日成交量 ÷ 近5日日均成交量。>1.5 放量，<0.8 缩量。放量上涨是强势信号，缩量上涨需警惕。",
+        "换手率": "全市场24h成交额 ÷ 流通市值。BTC正常2-4%，山寨币正常5-15%。过高可能是炒作，过低说明没人关注。",
+        "资金真实性": "OKX现货成交量占（现货+合约）总量的比例。现货占比高说明真实买盘驱动；合约占比高说明是杠杆/投机推动，价格可靠性低。",
+        "交易所流向": "综合量比和现货占比估算。成交量放大且现货主导 = 资金流入信号；缩量且合约主导 = 资金流出信号。",
+        "恐慌贪婪": "0-100的市场情绪指数（alternative.me）。<25极度恐惧（逆向看多机会），>75极度贪婪（注意回调风险），40-60中性健康。",
+    }
     signals = [
         ("量比", d1, c1, f"{vol_ratio:.2f}x" if vol_ratio else "—"),
         ("换手率", d2, c2, f"{turnover_pct:.2f}%" if turnover_pct > 0 else "N/A"),
@@ -377,14 +386,16 @@ with left_col:
 
     for name, desc, cls, val in signals:
         dot_color = color_map[cls]
+        tip = SIGNAL_TIPS.get(name, "")
         st.markdown(f"""
         <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #1e2230">
             <div style="width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0;margin-top:5px"></div>
             <div style="flex:1">
                 <span style="font-size:13px;color:#aaa">{name}</span>
                 <div style="font-size:11px;color:#555;margin-top:2px">{desc}</div>
+                <div style="font-size:11px;color:#3a4a5a;margin-top:3px;line-height:1.5">{tip}</div>
             </div>
-            <div style="text-align:right">
+            <div style="text-align:right;flex-shrink:0;margin-left:8px">
                 <div style="font-size:13px;font-weight:500;color:#ddd">{val}</div>
                 <span class="tag {tag_cls[cls]}">{tag_txt[cls]}</span>
             </div>
@@ -452,6 +463,47 @@ st.markdown(f"""
     <div style="font-size:15px;font-weight:600;margin-bottom:6px">{verdict_title}</div>
     <div>{verdict_body}</div>
 </div>""", unsafe_allow_html=True)
+
+# ── 指标说明 ─────────────────────────────────────────────────────────────────
+
+with st.expander("📖 指标说明 & 评分逻辑", expanded=False):
+    st.markdown("""
+**价格说明**
+- **现货价**：OKX 现货市场实时成交价（BTC-USDT）
+- **合约价**：OKX 永续合约价（BTC-USDT-SWAP），与现货有基差，通常差 $10-50，正常现象
+
+---
+
+**五维度指标说明**
+
+| 指标 | 含义 | 看多信号 | 看空信号 |
+|------|------|----------|----------|
+| **量比** | 今日成交量 ÷ 近5日均量 | >1.5（放量） | <0.8（缩量） |
+| **换手率** | 全市场24h成交额 ÷ 市值 | BTC>2%，山寨>5% | 极低说明无人关注 |
+| **资金真实性** | OKX现货占（现货+合约）比例 | 现货>40%，真实买盘 | 现货<20%，合约主导 |
+| **交易所流向** | 量比+现货占比联合估算 | 放量+现货主导 | 缩量+合约主导 |
+| **恐慌贪婪** | 市场情绪指数 0-100 | 25-55 健康/恐惧区 | >75 极度贪婪 |
+
+---
+
+**综合评分权重**
+
+量比 25% · 换手率 20% · 资金真实性 20% · 交易所流向 20% · 恐慌贪婪 15%
+
+- 🟢 **65分以上**：多数信号偏多，可关注做多机会
+- 🟡 **45-64分**：信号分化，建议观望等待方向
+- 🔴 **45分以下**：多数信号偏空，建议控制仓位
+
+---
+
+**数据来源说明**
+- 价格 / 量比 / 现货合约成交量：OKX 公开 API（实时）
+- 全市场成交额 / 市值：CoinGecko（5分钟缓存）
+- 恐慌贪婪指数：alternative.me（每日更新）
+- 交易所流向：由量比和现货占比推算，非链上真实数据
+
+> 所有数据仅供参考，不构成投资建议。短线交易风险极高，请做好风险管理。
+""")
 
 # ── Footer ───────────────────────────────────────────────────────────────────
 
