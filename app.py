@@ -99,18 +99,21 @@ def get_swap_ticker(inst_id):
     return None
 
 @st.cache_data(ttl=300)
-def get_market_cap(coin_id):
+def get_cg_data(coin_id):
+    """返回 (market_cap, total_24h_volume_usd) 全市场数据"""
     try:
         r = requests.get(
-            f"{CG_BASE}/simple/price?ids={coin_id}&vs_currencies=usd&include_market_cap=true",
+            f"{CG_BASE}/simple/price?ids={coin_id}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true",
             timeout=8
         )
         d = r.json()
         if coin_id in d:
-            return d[coin_id].get("usd_market_cap", 0)
+            mc = d[coin_id].get("usd_market_cap", 0)
+            vol = d[coin_id].get("usd_24h_vol", 0)
+            return mc, vol
     except:
         pass
-    return 0
+    return 0, 0
 
 @st.cache_data(ttl=300)
 def get_fear_greed():
@@ -283,7 +286,7 @@ with st.spinner("拉取数据中..."):
     candles_4h = get_candles(inst_id, bar="4H", limit=50)
     swap_ticker = get_swap_ticker(inst_id)
     fg_val, fg_label = get_fear_greed()
-    market_cap = get_market_cap(coin_id) if coin_id else 0
+    cg_market_cap, cg_vol_24h = get_cg_data(coin_id) if coin_id else (0, 0)
 
 if not ticker:
     st.error(f"无法获取 {inst_id} 数据，请检查币种名称是否正确（如 BTC-USDT）")
@@ -293,16 +296,32 @@ if not ticker:
 
 last_price = float(ticker.get("last", 0))
 open_24h = float(ticker.get("open24h", last_price))
-vol_24h = float(ticker.get("vol24h", 0))           # 币本位
-vol_ccy_24h = float(ticker.get("volCcy24h", 0))    # USDT成交额（现货）
+vol_24h = float(ticker.get("vol24h", 0))           # 币本位成交量
+# OKX volCcy24h = 计价货币成交额（USDT），直接就是成交额
+vol_ccy_24h = float(ticker.get("volCcy24h", 0))
+# 如果 volCcy24h 异常小，用 vol24h * price 估算
+if vol_ccy_24h < vol_24h * last_price * 0.01 and vol_24h > 0 and last_price > 0:
+    vol_ccy_24h = vol_24h * last_price
 change_24h = ((last_price - open_24h) / open_24h * 100) if open_24h > 0 else 0
 
-swap_vol_usd = float(swap_ticker.get("volCcy24h", 0)) if swap_ticker else 0
+# 合约成交额：OKX swap volCcy24h 是张数成交额，需转换
+# swap vol24h = 张数，每张 = 0.01 BTC（BTC合约），volCcy24h = USDT成交额
+swap_vol_usd = 0.0
+if swap_ticker:
+    sv = float(swap_ticker.get("volCcy24h", 0))
+    sv2 = float(swap_ticker.get("vol24h", 0))
+    # volCcy24h on swap is in base currency lots, volCcy24h might be USDT directly
+    # Use the larger reasonable value
+    sv_estimated = sv2 * last_price * 0.01  # BTC swap: 1 lot = 0.01 BTC
+    swap_vol_usd = sv if sv > sv2 else sv_estimated
 spot_vol_usd = vol_ccy_24h
 total_vol = spot_vol_usd + swap_vol_usd
 spot_ratio = spot_vol_usd / total_vol if total_vol > 0 else 0
 
-turnover_pct = (vol_ccy_24h / market_cap * 100) if market_cap > 0 else 0
+# 换手率用 CoinGecko 全市场成交量，更准确
+market_cap = cg_market_cap
+global_vol_24h = cg_vol_24h if cg_vol_24h > 0 else vol_ccy_24h
+turnover_pct = (global_vol_24h / market_cap * 100) if market_cap > 0 else 0
 vol_ratio = calc_vol_ratio(candles_1d)
 
 # ── 评分 ────────────────────────────────────────────────────────────────────────
@@ -316,7 +335,18 @@ total = weighted_score([s1, s2, s3, s4, s5])
 
 # ── Top metrics ─────────────────────────────────────────────────────────────────
 
-col1, col2, col3, col4, col5 = st.columns(5)
+with st.expander("🔍 原始 API 字段（调试用）", expanded=False):
+    if ticker:
+        st.markdown("**OKX Spot Ticker 原始字段：**")
+        debug_fields = {k: ticker.get(k, "—") for k in ["last","open24h","vol24h","volCcy24h","instId"]}
+        st.json(debug_fields)
+    if swap_ticker:
+        st.markdown("**OKX Swap Ticker 原始字段：**")
+        debug_swap = {k: swap_ticker.get(k, "—") for k in ["last","vol24h","volCcy24h","instId"]}
+        st.json(debug_swap)
+    st.markdown(f"**计算值：** spot_vol_usd={spot_vol_usd:,.0f} | swap_vol_usd={swap_vol_usd:,.0f} | market_cap={market_cap:,.0f} | turnover={turnover_pct:.4f}%")
+
+
 
 def metric_card(col, label, value, sub="", color=None):
     color_style = f"color:{color};" if color else ""
@@ -332,8 +362,10 @@ change_str = f"{'+' if change_24h>=0 else ''}{change_24h:.2f}%"
 total_color = "#4CAF50" if total >= 65 else "#FF9800" if total >= 45 else "#f44336"
 total_label = "看多" if total >= 65 else "观望" if total >= 45 else "看空"
 
-metric_card(col1, "当前价格", f"${last_price:,.4g}", change_str, price_color)
-metric_card(col2, "24h成交额", f"${vol_ccy_24h/1e9:.2f}B" if vol_ccy_24h >= 1e9 else f"${vol_ccy_24h/1e6:.1f}M", "现货")
+price_str = f"${last_price:,.0f}" if last_price >= 1 else f"${last_price:.6f}"
+metric_card(col1, "当前价格", price_str, change_str, price_color)
+vol_display = global_vol_24h if global_vol_24h > 0 else vol_ccy_24h
+metric_card(col2, "全市场24h成交额", f"${vol_display/1e9:.2f}B" if vol_display >= 1e9 else f"${vol_display/1e6:.0f}M", "CoinGecko 全市场")
 metric_card(col3, "换手率", f"{turnover_pct:.2f}%" if turnover_pct > 0 else "N/A", "成交额/市值")
 metric_card(col4, "恐慌贪婪", str(fg_val) if fg_val else "—", fg_label or "")
 metric_card(col5, "综合评分", f"{total}/100", total_label, total_color)
@@ -389,13 +421,13 @@ with right_col:
     # 详细数据
     st.markdown("##### 原始数据")
     raw_data = {
-        "指标": ["现货24h成交额", "合约24h成交额", "市值", "量比", "现货/合约比"],
+        "指标": ["全市场24h成交额(CG)", "OKX现货成交额", "OKX合约成交额", "市值", "量比"],
         "数值": [
-            f"${spot_vol_usd/1e9:.3f}B" if spot_vol_usd >= 1e9 else f"${spot_vol_usd/1e6:.1f}M",
-            f"${swap_vol_usd/1e9:.3f}B" if swap_vol_usd >= 1e9 else f"${swap_vol_usd/1e6:.1f}M",
+            f"${global_vol_24h/1e9:.2f}B" if global_vol_24h >= 1e9 else f"${global_vol_24h/1e6:.0f}M",
+            f"${spot_vol_usd/1e9:.3f}B" if spot_vol_usd >= 1e9 else f"${spot_vol_usd/1e6:.1f}M（OKX）",
+            f"${swap_vol_usd/1e9:.3f}B" if swap_vol_usd >= 1e9 else f"${swap_vol_usd/1e6:.1f}M（OKX）",
             f"${market_cap/1e9:.1f}B" if market_cap >= 1e9 else ("N/A" if market_cap == 0 else f"${market_cap/1e6:.0f}M"),
             f"{vol_ratio:.2f}x" if vol_ratio else "—",
-            f"{spot_ratio*100:.1f}% / {(1-spot_ratio)*100:.1f}%",
         ]
     }
     df_raw = pd.DataFrame(raw_data)
