@@ -308,12 +308,9 @@ change_24h = ((last_price - open_24h) / open_24h * 100) if open_24h > 0 else 0
 # swap vol24h = 张数，每张 = 0.01 BTC（BTC合约），volCcy24h = USDT成交额
 swap_vol_usd = 0.0
 if swap_ticker:
-    sv = float(swap_ticker.get("volCcy24h", 0))
-    sv2 = float(swap_ticker.get("vol24h", 0))
-    # volCcy24h on swap is in base currency lots, volCcy24h might be USDT directly
-    # Use the larger reasonable value
-    sv_estimated = sv2 * last_price * 0.01  # BTC swap: 1 lot = 0.01 BTC
-    swap_vol_usd = sv if sv > sv2 else sv_estimated
+    # volCcy24h on BTC-USDT-SWAP = BTC成交量，需乘以价格换算成USDT
+    swap_vol_ccy = float(swap_ticker.get("volCcy24h", 0))
+    swap_vol_usd = swap_vol_ccy * last_price
 spot_vol_usd = vol_ccy_24h
 total_vol = spot_vol_usd + swap_vol_usd
 spot_ratio = spot_vol_usd / total_vol if total_vol > 0 else 0
@@ -334,18 +331,6 @@ s5, c5, d5 = score_fg(fg_val)
 total = weighted_score([s1, s2, s3, s4, s5])
 
 # ── Top metrics ─────────────────────────────────────────────────────────────────
-
-with st.expander("🔍 原始 API 字段（调试用）", expanded=False):
-    if ticker:
-        st.markdown("**OKX Spot Ticker 原始字段：**")
-        debug_fields = {k: ticker.get(k, "—") for k in ["last","open24h","vol24h","volCcy24h","instId"]}
-        st.json(debug_fields)
-    if swap_ticker:
-        st.markdown("**OKX Swap Ticker 原始字段：**")
-        debug_swap = {k: swap_ticker.get(k, "—") for k in ["last","vol24h","volCcy24h","instId"]}
-        st.json(debug_swap)
-    st.markdown(f"**计算值：** spot_vol_usd={spot_vol_usd:,.0f} | swap_vol_usd={swap_vol_usd:,.0f} | market_cap={market_cap:,.0f} | turnover={turnover_pct:.4f}%")
-
 
 
 def metric_card(col, label, value, sub="", color=None):
