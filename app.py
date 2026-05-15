@@ -362,6 +362,7 @@ change_str = f"{'+' if change_24h>=0 else ''}{change_24h:.2f}%"
 total_color = "#4CAF50" if total >= 65 else "#FF9800" if total >= 45 else "#f44336"
 total_label = "看多" if total >= 65 else "观望" if total >= 45 else "看空"
 
+col1, col2, col3, col4, col5 = st.columns(5)
 price_str = f"${last_price:,.0f}" if last_price >= 1 else f"${last_price:.6f}"
 metric_card(col1, "当前价格", price_str, change_str, price_color)
 vol_display = global_vol_24h if global_vol_24h > 0 else vol_ccy_24h
