@@ -430,39 +430,147 @@ with right_col:
     df_raw = pd.DataFrame(raw_data)
     st.dataframe(df_raw, hide_index=True, use_container_width=True)
 
-# ── Verdict ──────────────────────────────────────────────────────────────────
+# ── 资金驱动判断 ────────────────────────────────────────────────────────────
+
+# 资金质量核心逻辑：现货/合约比 + 量比 → 直接结论
+if spot_ratio >= 0.35 and vol_ratio >= 1.2:
+    drive_label = "✅ 做多"
+    drive_color = "#4CAF50"
+    drive_bg = "#0d2018"
+    drive_border = "#4CAF50"
+    drive_reason = f"现货成交占 {spot_ratio*100:.0f}%，真实买盘驱动，量比 {vol_ratio:.2f}x 放量，涨势可信。"
+elif spot_ratio >= 0.35 and vol_ratio >= 0.8:
+    drive_label = "✅ 偏多观望"
+    drive_color = "#4CAF50"
+    drive_bg = "#0d2018"
+    drive_border = "#4CAF50"
+    drive_reason = f"现货占 {spot_ratio*100:.0f}%，买盘真实，但量比 {vol_ratio:.2f}x 未明显放量，等放量再入场。"
+elif spot_ratio < 0.2 and vol_ratio >= 1.2:
+    drive_label = "⚠️ 观望（虚假拉盘）"
+    drive_color = "#FF9800"
+    drive_bg = "#1e1600"
+    drive_border = "#FF9800"
+    drive_reason = f"合约成交占 {(1-spot_ratio)*100:.0f}%，现货仅 {spot_ratio*100:.0f}%。放量是合约杠杆推动，非真实买盘，不追多。"
+elif spot_ratio < 0.2:
+    drive_label = "🔴 做空 / 观望"
+    drive_color = "#f44336"
+    drive_bg = "#1e0a0a"
+    drive_border = "#f44336"
+    drive_reason = f"合约主导（现货仅 {spot_ratio*100:.0f}%），缩量 {vol_ratio:.2f}x，无真实买盘支撑，价格虚高，偏空。"
+elif vol_ratio < 0.7:
+    drive_label = "⚠️ 观望（缩量）"
+    drive_color = "#FF9800"
+    drive_bg = "#1e1600"
+    drive_border = "#FF9800"
+    drive_reason = f"成交量萎缩（量比 {vol_ratio:.2f}x），市场参与度低，等待方向选择。"
+else:
+    drive_label = "⚠️ 观望"
+    drive_color = "#FF9800"
+    drive_bg = "#1e1600"
+    drive_border = "#FF9800"
+    drive_reason = f"现货占 {spot_ratio*100:.0f}%，量比 {vol_ratio:.2f}x，信号中性，暂无明确方向。"
+
+st.markdown(f"""
+<div style="background:{drive_bg};border:1.5px solid {drive_border};border-radius:10px;padding:16px 20px;margin-bottom:12px">
+    <div style="font-size:20px;font-weight:700;color:{drive_color};margin-bottom:6px">{drive_label}</div>
+    <div style="font-size:14px;color:#ccc;line-height:1.6">{drive_reason}</div>
+</div>""", unsafe_allow_html=True)
+
+# ── Verdict（综合评分结论）────────────────────────────────────────────────────
 
 if total >= 65:
     verdict_cls = "verdict-bull"
-    verdict_title = f"🟢 看多 · 综合评分 {total}/100"
-    pos_sigs = [s[0] for s in signals if s[2] == "bull"]
-    neg_sigs = [s[0] for s in signals if s[2] == "bear"]
-    verdict_body = f"多项信号偏多：{', '.join(pos_sigs)}。"
-    if neg_sigs:
-        verdict_body += f" 注意：{', '.join(neg_sigs)} 信号偏空，注意风险控制。"
-    verdict_body += " 短线可关注做多机会，严格设置止损。"
+    verdict_title = f"🟢 综合评分 {total}/100 · 做多"
+    verdict_body = f"量比、换手率、资金结构多项偏多。现货占比 {spot_ratio*100:.0f}%，买盘真实。"
+    if fg_val and fg_val < 40:
+        verdict_body += f" 恐惧情绪（{fg_val}）提供逆向机会。"
 elif total >= 45:
     verdict_cls = "verdict-warn"
-    verdict_title = f"🟡 观望 · 综合评分 {total}/100"
-    bull_sigs = [s[0] for s in signals if s[2] == "bull"]
-    bear_sigs = [s[0] for s in signals if s[2] == "bear"]
-    verdict_body = f"信号分化，暂无明确方向。"
-    if bull_sigs:
-        verdict_body += f" 利多：{', '.join(bull_sigs)}。"
-    if bear_sigs:
-        verdict_body += f" 利空：{', '.join(bear_sigs)}。"
-    verdict_body += " 建议等待信号更清晰后再入场。"
+    verdict_title = f"🟡 综合评分 {total}/100 · 观望"
+    if spot_ratio < 0.2:
+        verdict_body = f"合约主导（现货 {spot_ratio*100:.0f}%），涨势不可信，不追多，等现货放量确认。"
+    elif vol_ratio < 0.8:
+        verdict_body = f"缩量（{vol_ratio:.2f}x），参与度不足，等量能配合再入场。"
+    else:
+        verdict_body = f"信号混合，无明确优势方向，持币观望。"
 else:
     verdict_cls = "verdict-bear"
-    verdict_title = f"🔴 看空 · 综合评分 {total}/100"
-    neg_sigs = [s[0] for s in signals if s[2] == "bear"]
-    verdict_body = f"多项指标偏空：{', '.join(neg_sigs)}。建议控制仓位，等待信号改善。"
+    verdict_title = f"🔴 综合评分 {total}/100 · 做空"
+    verdict_body = f"合约主导（现货 {spot_ratio*100:.0f}%）+ 缩量（{vol_ratio:.2f}x），虚假行情，轻仓做空或空仓等待。"
 
 st.markdown(f"""
 <div class="verdict-box {verdict_cls}">
     <div style="font-size:15px;font-weight:600;margin-bottom:6px">{verdict_title}</div>
     <div>{verdict_body}</div>
 </div>""", unsafe_allow_html=True)
+
+# ── 昨日高低点 ───────────────────────────────────────────────────────────────
+
+st.markdown("---")
+st.markdown("##### 昨日价格区间（北京时间）")
+
+# OKX 日线 K线：candles[0]=今日，candles[1]=昨日
+# 格式：[ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
+# 北京时间 = UTC+8，OKX 日线以 UTC 00:00 为界，北京时间 08:00 切换
+
+yesterday_coins = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "BNB-USDT", "XRP-USDT", "DOGE-USDT"]
+if inst_id not in yesterday_coins:
+    yesterday_coins = [inst_id] + yesterday_coins
+
+@st.cache_data(ttl=300)
+def get_yesterday_range(coin):
+    try:
+        r = requests.get(f"{OKX_BASE}/market/candles?instId={coin}&bar=1D&limit=2", timeout=8)
+        d = r.json()
+        if d.get("code") == "0" and len(d["data"]) >= 2:
+            c = d["data"][1]  # index 1 = 昨日
+            ts_ms = int(c[0])
+            # 转北京时间
+            import datetime as dt
+            beijing_date = dt.datetime.utcfromtimestamp(ts_ms/1000) + dt.timedelta(hours=8)
+            o, h, l, close_p = float(c[1]), float(c[2]), float(c[3]), float(c[4])
+            vol_usdt = float(c[7]) if c[7] else float(c[6])
+            chg = (close_p - o) / o * 100
+            return {
+                "date": beijing_date.strftime("%m/%d"),
+                "high": h, "low": l, "close": close_p,
+                "open": o, "chg": chg, "vol": vol_usdt
+            }
+    except:
+        pass
+    return None
+
+def fmt_price(p):
+    if p >= 1000:
+        return f"${p:,.0f}"
+    elif p >= 1:
+        return f"${p:.2f}"
+    else:
+        return f"${p:.5f}"
+
+cols = st.columns(len(yesterday_coins))
+for i, coin in enumerate(yesterday_coins):
+    info = get_yesterday_range(coin)
+    sym = coin.replace("-USDT", "")
+    with cols[i]:
+        if info:
+            chg_color = "#4CAF50" if info["chg"] >= 0 else "#f44336"
+            chg_str = f"+{info['chg']:.1f}%" if info["chg"] >= 0 else f"{info['chg']:.1f}%"
+            rng = info["high"] - info["low"]
+            pct_in_rng = (info["close"] - info["low"]) / rng * 100 if rng > 0 else 50
+            st.markdown(f"""
+<div style="background:#13161e;border:1px solid #1e2230;border-radius:10px;padding:10px 12px;text-align:center">
+    <div style="font-size:13px;font-weight:600;color:#ddd;margin-bottom:4px">{sym}</div>
+    <div style="font-size:11px;color:{chg_color};margin-bottom:6px">{chg_str} · {info["date"]}</div>
+    <div style="font-size:12px;color:#4CAF50;font-weight:600">{fmt_price(info["high"])}</div>
+    <div style="height:4px;background:#1e2230;border-radius:2px;margin:4px 0;overflow:hidden">
+        <div style="height:100%;width:{pct_in_rng:.0f}%;background:linear-gradient(90deg,#f44336,#4CAF50)"></div>
+    </div>
+    <div style="font-size:12px;color:#f44336;font-weight:600">{fmt_price(info["low"])}</div>
+    <div style="font-size:10px;color:#555;margin-top:4px">收 {fmt_price(info["close"])}</div>
+</div>""", unsafe_allow_html=True)
+        else:
+            st.markdown(f"**{sym}** 数据加载失败")
 
 # ── 指标说明 ─────────────────────────────────────────────────────────────────
 
